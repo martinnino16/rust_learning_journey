@@ -1,111 +1,120 @@
-use std::{env, fs};
+use rand::RngExt;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use rand::RngExt;
-use serde::{Deserialize, Serialize};
+use std::{env, fs};
 
-#[derive(Serialize,Deserialize,Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Task {
     id: u32,
     description: String,
     completed: bool,
 }
 
-fn main()  {
+impl Task {
+    fn new(description: String) -> Self {
+        Task {
+            id: rand::rng().random_range(0..1000),
+            description,
+            completed: false,
+        }
+    }
+
+    fn remove(tasks: &mut Vec<Task>, id: u32) -> Result<(), String> {
+        let index = tasks
+            .iter()
+            .position(|task| task.id == id)
+            .ok_or(format!("Task with id {} not found", id))?;
+        tasks.remove(index);
+        Ok(())
+    }
+
+    fn load(path: String) -> Result<Vec<Self>, std::io::Error> {
+        let path = Path::new(&path);
+
+        if let Some(parent) = Path::new(path).parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = File::open(path)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+
+        if contents.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let tasks: Vec<Task> = serde_json::from_str(&contents)?;
+        Ok(tasks)
+    }
+
+    fn complete(tasks: &mut [Task], id: u32) -> Result<(), String> {
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == id)
+            .ok_or(println!("Error getting task {}", id))
+            .unwrap();
+        task.completed = true;
+        Ok(())
+    }
+
+    fn save(tasks: &[Task], path: String) -> Result<(), std::io::Error> {
+        let path = Path::new(&path);
+        let json_string = serde_json::to_string_pretty(tasks)?;
+        let mut file = File::create(path)?;
+        file.write_all(json_string.as_bytes())?;
+        Ok(())
+    }
+}
+
+fn parse_id(args: &[String], index: usize) -> Result<u32, String> {
+    let id_str = args
+        .get(index)
+        .ok_or_else(|| format!("Index out of bounds: {}", index))?;
+    id_str
+        .parse()
+        .map_err(|_| format!("Invalid ID: {}", id_str))
+}
+
+fn main() {
     let args: Vec<String> = env::args().collect();
     let action: &String = &args[1];
     let file_path = "db/tasks.json".to_string();
-    let path = Path::new(&file_path);
+    let mut tasks: Vec<Task> = Task::load(file_path).unwrap();
 
-    if let Some(parent) = Path::new(path).parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    let mut tasks: Vec<Task> = Vec::new();
-    let mut file = File::open(&path).unwrap();
-    let mut contents: String = String::new();
-
-    file.read_to_string(&mut contents).unwrap();
-
-    println!("{}", contents);
-
-    if contents.trim().is_empty() {
-        tasks = Vec::new();
-    } else {
-        tasks = serde_json::from_str(&contents).unwrap();
-    };
-    
     match action.as_ref() {
         "add" => {
             let description: &String = &args[2];
-            let task = Task {
-                id: rand::rng().random_range(0..1000),
-                description: description.to_string(),
-                completed: false
-            };
+            let task = Task::new(description.to_string());
+            let file_path = "db/tasks.json".to_string();
             tasks.push(task);
-
-            let json_string = match serde_json::to_string_pretty(&tasks) {
-                Err(why) => panic!("couldn't serialize task: {}", why),
-                Ok(string) => string,
-            };
-            let mut file = File::create(path).unwrap();
-
-            match file.write_all(json_string.as_bytes()) {
-                Err(why) => panic!("couldn't write task: {}", why),
-                Ok(_) => println!("task saved"),
-            };
+            Task::save(&tasks, file_path).unwrap();
+            println!("Task added and saved!");
         }
         "list" => {
             println!("{:?}", tasks);
         }
         "remove" => {
-            let id = &args[2];
-            let id_str: u32 = id.trim().parse().expect("id is not a number!");
-            let index = tasks.iter().position(|task| task.id == id_str).unwrap();
-            tasks.remove(index);
-            let mut file = File::create(path).unwrap();
-            let json_string = match serde_json::to_string_pretty(&tasks) {
-                Err(why) => panic!("couldn't serialize task: {}", why),
-                Ok(string) => string,
-            };
-            let mut file= File::create(path).unwrap();
-            match file.write_all(json_string.as_bytes()) {
-                Err(why) => panic!("couldn't write task: {}", why),
-                Ok(_) => println!("task deleted"),
-            }
+            let id = parse_id(&args, 2).unwrap();
+            let file_path = "db/tasks.json".to_string();
+            Task::remove(&mut tasks, id).unwrap();
+            Task::save(&tasks, file_path).unwrap();
+            println!("Task removed and saved!");
         }
         "clear" => {
             tasks.clear();
-            let json_string = match serde_json::to_string_pretty(&tasks) {
-                Err(why) => panic!("couldn't serialize task: {}", why),
-                Ok(string) => string,
-            };
-            let mut file = File::create(path).unwrap();
-            match file.write_all(json_string.as_bytes()) {
-                Err(why) => panic!("couldn't write task: {}", why),
-                Ok(_) => println!("tasks cleared"),
-            }
+            let file_path = "db/tasks.json".to_string();
+            Task::save(&tasks, file_path).unwrap();
+            println!("Tasks cleared and saved!");
         }
         "done" => {
-            let id = &args[2];
-            let id_str: u32 = id.trim().parse().expect("id is not a number!");
-            let task = match tasks.iter_mut().find(|task| task.id == id_str ).ok_or(println!("Error getting task {}", id_str )) {
-                Ok(task) => task,
-                Err(e) => panic!("Error getting task")
-            };
-            task.completed = true;
-            let json_string = match serde_json::to_string_pretty(&tasks) {
-                Err(why) => panic!("couldn't serialize task: {}", why),
-                Ok(string) => string,
-            };
-            let mut file = File::create(path).unwrap();
-            match file.write_all(json_string.as_bytes()) {
-                Err(why) => panic!("couldn't write task: {}", why),
-                Ok(_) => println!("tasks updated"),
-            }
+            let id = parse_id(&args, 2).unwrap();
+            let file_path = "db/tasks.json".to_string();
 
+            Task::complete(&mut tasks, id).unwrap();
+            Task::save(&tasks, file_path).unwrap();
+            println!("Task completed with id {}!", id);
         }
-        _ => println!("Unknown action")
+        _ => println!("Unknown action"),
     }
 }
