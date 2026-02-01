@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::{env, fs};
+use std::{env, fmt, fs};
+use std::fmt::Formatter;
+
+const FILE_PATH: &str = "db/tasks.json";
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Task {
@@ -13,9 +16,10 @@ struct Task {
 }
 
 impl Task {
-    fn new(description: String) -> Self {
+    fn new(description: String, existing_tasks:&[Task]) -> Self {
+        let max_id = existing_tasks.iter().map(|t| t.id).max().unwrap_or(0);
         Task {
-            id: rand::rng().random_range(0..1000),
+            id: max_id + 1,
             description,
             completed: false,
         }
@@ -36,6 +40,10 @@ impl Task {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
         }
+
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
         let mut file = File::open(path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -52,8 +60,7 @@ impl Task {
         let task = tasks
             .iter_mut()
             .find(|task| task.id == id)
-            .ok_or(println!("Error getting task {}", id))
-            .unwrap();
+            .ok_or_else(|| format!("Task with id {} not found", id))?;
         task.completed = true;
         Ok(())
     }
@@ -67,6 +74,13 @@ impl Task {
     }
 }
 
+impl fmt::Display for Task {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let status = if self.completed { "✅" } else { "⬜" };
+        write!(f, "{} [{}] {}", status, self.id, self.description)
+    }
+}
+
 fn parse_id(args: &[String], index: usize) -> Result<u32, String> {
     let id_str = args
         .get(index)
@@ -76,45 +90,78 @@ fn parse_id(args: &[String], index: usize) -> Result<u32, String> {
         .map_err(|_| format!("Invalid ID: {}", id_str))
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let action: &String = &args[1];
-    let file_path = "db/tasks.json".to_string();
-    let mut tasks: Vec<Task> = Task::load(file_path).unwrap();
 
-    match action.as_ref() {
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        eprintln!("Error: No action provided");
+        std::process::exit(1);
+    }
+    let action: &String = &args[1];
+
+    let mut tasks: Vec<Task> = match Task::load(FILE_PATH.to_string()) {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            eprintln!("Warning: could not load tasks: {}", e);
+            Vec::new()
+        }
+    };
+
+    let result: Result<(), String> = match action.as_ref() {
         "add" => {
             let description: &String = &args[2];
-            let task = Task::new(description.to_string());
-            let file_path = "db/tasks.json".to_string();
+            let task = Task::new(description.to_string(), &tasks);
             tasks.push(task);
-            Task::save(&tasks, file_path).unwrap();
+            Task::save(&tasks, FILE_PATH.to_string()).map_err(|e| format!("Failed to save: {}", e))?;
             println!("Task added and saved!");
+            Ok(())
         }
         "list" => {
-            println!("{:?}", tasks);
+            if tasks.is_empty() {
+                println!("No tasks found");
+            } else {
+                println!("Tasks:");
+                for task in &tasks {
+                    println!("{}", task);
+                }
+                println!();
+            }
+            Ok(())
         }
         "remove" => {
-            let id = parse_id(&args, 2).unwrap();
-            let file_path = "db/tasks.json".to_string();
-            Task::remove(&mut tasks, id).unwrap();
-            Task::save(&tasks, file_path).unwrap();
+            let id = parse_id(&args, 2)?;
+            Task::remove(&mut tasks, id)?;
+            Task::save(&tasks, FILE_PATH.to_string())?;
             println!("Task removed and saved!");
+            Ok(())
         }
         "clear" => {
             tasks.clear();
-            let file_path = "db/tasks.json".to_string();
-            Task::save(&tasks, file_path).unwrap();
+            Task::save(&tasks, FILE_PATH.to_string())?;
             println!("Tasks cleared and saved!");
+            Ok(())
         }
         "done" => {
-            let id = parse_id(&args, 2).unwrap();
-            let file_path = "db/tasks.json".to_string();
+            let id = parse_id(&args, 2)?;
 
-            Task::complete(&mut tasks, id).unwrap();
-            Task::save(&tasks, file_path).unwrap();
+            Task::complete(&mut tasks, id)?;
+            Task::save(&tasks, FILE_PATH.to_string())?      ;
             println!("Task completed with id {}!", id);
+            Ok(())
         }
-        _ => println!("Unknown action"),
+        _ => {
+            eprintln!("Error: Unknown action: {}", action);
+            std::process::exit(1);
+        },
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
     }
+
+    Ok(())
+
 }
