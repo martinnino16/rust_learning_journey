@@ -1,37 +1,12 @@
 [
   {
-    "id": 495,
-    "description": "Aprender arquitecturas",
+    "id": "4e37834e-897a-430e-9de2-6df51b1382c0",
+    "description": "Aprender langgraph y ia",
+    "completed": false
+  },
+  {
+    "id": "2e82c659-7672-4dfb-8dbd-5f53af9ec37b",
+    "description": "aprender reactjs",
     "completed": true
-  },
-  {
-    "id": 726,
-    "description": "Aprender nuevos conceptos",
-    "completed": false
-  },
-  {
-    "id": 28,
-    "description": "Hacer ejercicios de excersim",
-    "completed": true
-  },
-  {
-    "id": 979,
-    "description": "Enteder como funciona rust",
-    "completed": false
-  },
-  {
-    "id": 545,
-    "description": "Aprender SQL",
-    "completed": false
-  },
-  {
-    "id": 853,
-    "description": "Aprender Typescript :D",
-    "completed": false
-  },
-  {
-    "id": 502,
-    "description": "darle flores al amor de mi vida",
-    "completed": false
   }
 ]

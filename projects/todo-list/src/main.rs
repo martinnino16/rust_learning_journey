@@ -1,31 +1,32 @@
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
+use std::fmt::Formatter;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::{env, fmt, fs};
-use std::fmt::Formatter;
+use uuid::Uuid;
+use clap::{Parser, Subcommand};
 
 const FILE_PATH: &str = "db/tasks.json";
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Task {
-    id: u32,
+    id: Uuid,
     description: String,
     completed: bool,
 }
 
 impl Task {
-    fn new(description: String, existing_tasks:&[Task]) -> Self {
-        let max_id = existing_tasks.iter().map(|t| t.id).max().unwrap_or(0);
+    fn new(description: String, existing_tasks: &[Task]) -> Self {
         Task {
-            id: max_id + 1,
+            id: Uuid::new_v4(),
             description,
             completed: false,
         }
     }
 
-    fn remove(tasks: &mut Vec<Task>, id: u32) -> Result<(), String> {
+    fn remove(tasks: &mut Vec<Task>, id: Uuid) -> Result<(), String> {
         let index = tasks
             .iter()
             .position(|task| task.id == id)
@@ -56,7 +57,7 @@ impl Task {
         Ok(tasks)
     }
 
-    fn complete(tasks: &mut [Task], id: u32) -> Result<(), String> {
+    fn complete(tasks: &mut [Task], id: Uuid) -> Result<(), String> {
         let task = tasks
             .iter_mut()
             .find(|task| task.id == id)
@@ -73,33 +74,40 @@ impl Task {
         Ok(())
     }
 }
+#[derive(Parser)]
+#[command(name = "todo")]
+#[command(about = "A simple todo list manager", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Add { description: String },
+    List,
+    Done {id: Uuid},
+    Remove { id: Uuid },
+    Clear
+}
 
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let status = if self.completed { "✅" } else { "⬜" };
-        write!(f, "{} [{}] {}", status, self.id, self.description)
+        write!(f, "{} [{}...] {}", status, &self.id.to_string()[..8], self.description)
     }
 }
 
-fn parse_id(args: &[String], index: usize) -> Result<u32, String> {
+fn parse_id(args: &[String], index: usize) -> Result<Uuid, String> {
     let id_str = args
         .get(index)
-        .ok_or_else(|| format!("Index out of bounds: {}", index))?;
-    id_str
-        .parse()
-        .map_err(|_| format!("Invalid ID: {}", id_str))
+        .ok_or_else(|| format!("Index out of bounds: {}", index))?  ;
+    Uuid::parse_str(id_str).map_err(|_| format!("Invalid UUID: {}", id_str))
 }
 
-
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
+    let args = Cli::parse();
 
-    if args.len() < 2 {
-        eprintln!("Error: No action provided");
-        std::process::exit(1);
-    }
-    let action: &String = &args[1];
 
     let mut tasks: Vec<Task> = match Task::load(FILE_PATH.to_string()) {
         Ok(tasks) => tasks,
@@ -109,16 +117,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let result: Result<(), String> = match action.as_ref() {
-        "add" => {
-            let description: &String = &args[2];
-            let task = Task::new(description.to_string(), &tasks);
+    let result: Result<(), String> = match args.command{
+        Commands::Add { description } => {
+            let task = Task::new(description, &tasks);
             tasks.push(task);
-            Task::save(&tasks, FILE_PATH.to_string()).map_err(|e| format!("Failed to save: {}", e))?;
+            Task::save(&tasks, FILE_PATH.to_string())
+                .map_err(|e| format!("Failed to save: {}", e))?;
             println!("Task added and saved!");
             Ok(())
         }
-        "list" => {
+        Commands::List => {
             if tasks.is_empty() {
                 println!("No tasks found");
             } else {
@@ -130,31 +138,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        "remove" => {
-            let id = parse_id(&args, 2)?;
+        Commands::Remove {id} => {
             Task::remove(&mut tasks, id)?;
             Task::save(&tasks, FILE_PATH.to_string())?;
             println!("Task removed and saved!");
             Ok(())
         }
-        "clear" => {
+        Commands::Clear => {
             tasks.clear();
             Task::save(&tasks, FILE_PATH.to_string())?;
             println!("Tasks cleared and saved!");
             Ok(())
         }
-        "done" => {
-            let id = parse_id(&args, 2)?;
-
+        Commands::Done {id} => {
             Task::complete(&mut tasks, id)?;
-            Task::save(&tasks, FILE_PATH.to_string())?      ;
+            Task::save(&tasks, FILE_PATH.to_string())?;
             println!("Task completed with id {}!", id);
             Ok(())
         }
-        _ => {
-            eprintln!("Error: Unknown action: {}", action);
-            std::process::exit(1);
-        },
     };
 
     if let Err(e) = result {
@@ -163,5 +164,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-
 }
