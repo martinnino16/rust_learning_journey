@@ -109,13 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
 
 
-    let mut tasks: Vec<Task> = match Task::load(FILE_PATH.to_string()) {
-        Ok(tasks) => tasks,
-        Err(e) => {
-            eprintln!("Warning: could not load tasks: {}", e);
-            Vec::new()
-        }
-    };
+    let mut tasks: Vec<Task> = Task::load(FILE_PATH.to_string()).unwrap_or_else(|e| {
+        eprintln!("Warning: could not load tasks: {}", e);
+        Vec::new()
+    });
 
     let result: Result<(), String> = match args.command{
         Commands::Add { description } => {
