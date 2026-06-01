@@ -1,0 +1,5 @@
+Rust is fast
+This line has pattern
+Another line
+PATTERN in uppercase
+pattern appears again
