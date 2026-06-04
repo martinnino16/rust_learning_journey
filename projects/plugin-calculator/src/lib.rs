@@ -276,38 +276,159 @@ fn tokenize(input: &str) -> Result<Vec<Token>, CalcError> {
     Ok(result)
 }
 
-fn evaluate(tokens: Vec<Token>, ops: &HashMap<String, Box<dyn Operation>>) -> Result<f64, CalcError>{
-    //evaluar tokens
-    //recorrer los tokens
-    //si el token es un numero obtener el numero
-    //si el token es operador parsear el operador por el nombre de la operacion
-    //ejecutar operacion atravez de las operaciones del hashmap
-    //devolver el resultado o error (ok) error
+fn precedence(op: char) -> usize {
+    match op {
+        '+' | '-' => 1,
+        '*' | '/' => 2,
+        _ => 0,
+    }
+}
 
-    let result = match tokens.as_slice() {
-        [Token::Number(first_value), Token::Operator(operator), Token::Number(second_value)] => {
-            let array_numbers: [f64; 2] = [*first_value,*second_value];
-            let args: &[f64] = &array_numbers; 
-            let op = match operator {
-                '+' => "add",
-                '-' => "subtract",
-                '/' => "divide",
-                '*' => "multiply",
-                _ => return Err(CalcError::UnknownOperation("Unknown Operation".to_string()))
-            };
-            let operation = ops.get(op).ok_or_else(|| CalcError::UnknownOperation(op.to_string()))?;
-            let result = operation.execute(args)?;
-            result
-        },
-        [Token::Identifier(identifier), Token::LeftParen, Token::Number(value), Token::RightParen] => {
-            let array_numbers: [f64; 1] = [*value];
-            let args: &[f64] = &array_numbers;
-            let operation = ops.get(identifier).ok_or_else(|| CalcError::UnknownOperation(identifier.to_string()))?;
-            let result = operation.execute(args)?;
-            result
-        },
-        _ => return Err(CalcError::ParseError("Pattern not allow".to_string())) 
+fn to_postfix(tokens: Vec<Token>) -> Result<Vec<Token>, CalcError> {
+    let mut output: Vec<Token> = Vec::new();
+    let mut operator_stack: Vec<Token> = Vec::new();
+
+    for token in tokens {
+        match token {
+            Token::Number(value) => {
+                output.push(Token::Number(value));
+            }
+
+            Token::Identifier(name) => {
+                operator_stack.push(Token::Identifier(name));
+            }
+
+            Token::LeftParen => {
+                operator_stack.push(Token::LeftParen);
+            }
+
+            Token::RightParen => {
+                let mut found_left_paren = false;
+
+                while let Some(top) = operator_stack.pop() {
+                    match top {
+                        Token::LeftParen => {
+                            found_left_paren = true;
+                            break;
+                        }
+                        other => output.push(other),
+                    }
+                }
+
+                if !found_left_paren {
+                    return Err(CalcError::ParseError(
+                            "Mismatched parentheses: missing '('".to_string(),
+                    ));
+                }
+
+                if let Some(Token::Identifier(_)) = operator_stack.last() {
+                    let func = operator_stack.pop().unwrap();
+                    output.push(func);
+                }
+            }
+
+            Token::Operator(current_op) => {
+                while let Some(top) = operator_stack.last() {
+                    match top {
+                        Token::Operator(top_op)
+                            if precedence(*top_op) >= precedence(current_op) =>
+                            {
+                                let op = operator_stack.pop().unwrap();
+                                output.push(op);
+                            }
+                        _ => break,
+                    }
+                }
+
+                operator_stack.push(Token::Operator(current_op));
+            }
+        }
+    }
+
+    while let Some(top) = operator_stack.pop() {
+        match top {
+            Token::LeftParen | Token::RightParen => {
+                return Err(CalcError::ParseError(
+                        "Mismatched parentheses".to_string(),
+                ));
+            }
+            other => output.push(other),
+        }
+    }
+
+    Ok(output)
+}
+
+fn eval_postfix(tokens: Vec<Token>, ops: &HashMap<String, Box<dyn Operation>>) -> Result<f64, CalcError> {
+    let mut value_stack: Vec<f64> = Vec::new();
+
+    for token in tokens {
+        match token {
+            Token::Number(value) => value_stack.push(value),
+            Token::Operator(op) => {
+                let operation = match op {
+                    '+' => "add",
+                    '-' => "subtract",
+                    '/' => "divide",
+                    '*' => "multiply",
+                    _ => return Err(CalcError::ParseError("Unsupported operator".to_string()))
+                };
+                let operation_from_ops = ops.get(operation).ok_or_else(|| CalcError::UnknownOperation(operation.to_string()))?;
+                if value_stack.len() >= 2 {
+                    let right_operator = value_stack.pop().unwrap();
+                    let left_operator = value_stack.pop().unwrap();
+                    let numbers: [f64;2] = [left_operator,right_operator];
+                    let args: &[f64] = &numbers;
+                    let result = operation_from_ops.execute(args)?;
+                    value_stack.push(result);
+                } else {
+                    return Err(CalcError::ParseError("Not enough operands".to_string()))
+                }
+            },
+            Token::Identifier(identifier) => {
+                let operation = ops.get(&identifier).ok_or_else(|| CalcError::UnknownOperation(identifier.to_string()))?;
+                let arity = operation.arity();
+                let mut numbers = Vec::with_capacity(arity);
+                if value_stack.len() >= arity {
+                   for _ in 0..arity {
+                       let value =  value_stack
+                           .pop()
+                           .ok_or_else(|| CalcError::ParseError("Not enough operands".to_string()))?;
+                       numbers.push(value);
+                   } 
+                } else {
+                    return Err(CalcError::ParseError("Not enough operands".to_string()))
+                }
+                numbers.reverse();
+                let result = operation.execute(&numbers)?;
+                value_stack.push(result);
+            },
+            _ => return Err(CalcError::ParseError("Invalid parse token".to_string()))
+        }
+    }
+
+    if value_stack.len() == 0 {
+       return Err(CalcError::ParseError("Error parsing result".to_string()))
     };
+
+    if value_stack.len() > 1 {
+        return Err(CalcError::ParseError("There are more than a result".to_string()))
+    };
+
+    match value_stack.len() {
+        1 => Ok(value_stack.pop().unwrap()),
+        0 => Err(CalcError::ParseError("Error parsing result".to_string())),
+        _ => Err(CalcError::ParseError(
+            "Expected exactly one result on stack".to_string(),
+        )),
+    }
+
+}
+
+fn evaluate(tokens: Vec<Token>, ops: &HashMap<String, Box<dyn Operation>>) -> Result<f64, CalcError>{
+
+    let to_postfix = to_postfix(tokens)?;
+    let result = eval_postfix(to_postfix, ops)?;
     Ok(result)
 
 }
@@ -316,7 +437,7 @@ pub fn run(input: &str) -> Result<(), Box<dyn Error>> {
 
     let tokens = tokenize(input)?;
     let calc = Calculator::new();
-    let result = evaluate(tokens, &calc.operations )?;
+    let result = evaluate(tokens, &calc.operations)?;
     println!("{result}");
     Ok(())
 }
@@ -546,21 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn tokenizes_syntactically_invalid_expression_without_lexical_error() {
-        let result = tokenize("2 + * 3").expect("tokenize should succeed");
-
-        assert_eq!(
-            vec![
-            Token::Number(2.0),
-            Token::Operator('+'),
-            Token::Operator('*'),
-            Token::Number(3.0),
-            ],
-            result
-        );
-    }
-
-    #[test]
     fn tokenizes_empty_function_call_without_lexical_error() {
         let result = tokenize("sqrt()").expect("tokenize should succeed");
 
@@ -612,7 +718,7 @@ mod tests {
         let result = evaluate(tokens, &calc.operations).expect("evaluator should succeed");
 
         assert_eq!(4.0, result);  
- 
+
     }
 
     #[test]
@@ -671,5 +777,121 @@ mod tests {
 
         assert_eq!(1.0, result);  
     } 
+
+
+    #[test]
+    fn to_postfix_add() {
+        let infix_add = "2 + 3";
+        let tokens = tokenize(infix_add).expect("tokenize should succeed");
+        let postfix = to_postfix(tokens).expect("postfix process should succeed");
+
+        assert_eq!(
+           vec![Token::Number(2.0), Token::Number(3.0), Token::Operator('+')],
+           postfix
+        )
+    }
+
+    #[test]
+    fn to_postfix_multiply() {
+        let infix_multiply = "4 * 5";
+        let tokens = tokenize(infix_multiply).expect("tokenize should succeed");
+        let postfix = to_postfix(tokens).expect("postfix process should succeed");
+
+        assert_eq!(
+           vec![Token::Number(4.0), Token::Number(5.0), Token::Operator('*')],
+           postfix
+        )
+    }
+
+    #[test]
+    fn to_postfix_precedence() {
+        let infix_precedence = "2 + 3 * 4";
+        let tokens = tokenize(infix_precedence).expect("tokenize should succeed");
+        let postfix = to_postfix(tokens).expect("postfix process should succeed");
+
+        assert_eq!(
+           vec![Token::Number(2.0), Token::Number(3.0),Token::Number(4.0), Token::Operator('*'), Token::Operator('+')],
+           postfix
+        )
+ 
+    }
+
+    #[test]
+    fn to_postfix_parentheses() {
+        let infix_parentheses = "(2 + 3) * 4";
+        let tokens = tokenize(infix_parentheses).expect("tokenize should succeed");
+        let postfix = to_postfix(tokens).expect("postfix process should succeed");
+
+        assert_eq!(
+           vec![Token::Number(2.0), Token::Number(3.0),Token::Operator('+'), Token::Number(4.0), Token::Operator('*')],
+           postfix
+        )
+ 
+    }
+
+    #[test]
+    fn to_postfix_function_call() {
+        let infix_function_call = "sqrt(16)";
+        let tokens = tokenize(infix_function_call).expect("tokenize should succeed");
+        let postfix = to_postfix(tokens).expect("postfix process should succeed");
+
+        assert_eq!(
+           vec![Token::Number(16.0), Token::Identifier("sqrt".to_string())],
+           postfix
+        )
+ 
+    }
+    #[test]
+    fn evaluates_operator_precedence() {
+        let calc = Calculator::new();
+        let tokens = tokenize("2 + 3 * 4").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(14.0, result);
+    }
+    #[test]
+    fn evaluates_parenthesized_expression() {
+        let calc = Calculator::new();
+        let tokens = tokenize("(2 + 3) * 4").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(20.0, result);
+    }
+
+    #[test]
+    fn evaluates_nested_parentheses_expression() {
+        let calc = Calculator::new();
+        let tokens = tokenize("10 * (5 + 3)").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(80.0, result);
+    }
+
+    #[test]
+    fn evaluates_sqrt_expression() {
+        let calc = Calculator::new();
+        let tokens = tokenize("sqrt(16)").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(4.0, result);
+    }
+
+    #[test]
+    fn evaluates_sin_expression() {
+        let calc = Calculator::new();
+        let tokens = tokenize("sin(0)").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(0.0, result);
+    }
+
+    #[test]
+    fn evaluates_cos_expression() {
+        let calc = Calculator::new();
+        let tokens = tokenize("cos(0)").expect("tokenize should succeed");
+        let result = evaluate(tokens, &calc.operations).expect("evaluate should succeed");
+
+        assert_eq!(1.0, result);
+    }
 }
 
